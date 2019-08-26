@@ -37,7 +37,6 @@ process_event(Event,Proc) ->
 process_task(Stage,Proc) -> process_task(Stage,Proc,false).
 process_task(Stage,Proc,NoFlow) ->
     Curr = Proc#process.task,
-    Term = [],
     Task = bpe:step(Curr,Proc),
     Targets = case NoFlow of
                    true -> noflow;
@@ -45,7 +44,7 @@ process_task(Stage,Proc,NoFlow) ->
 
     {Status,{Reason,Target},ProcState} = case {Targets,Proc#process.task,Stage} of
          {noflow,_,_} -> {reply,{complete,Curr},Proc};
-         {[],Term,_}  -> bpe_task:already_finished(Proc);
+         {[],[],_}  -> bpe_task:already_finished(Proc);
          {[],Curr,_}  -> bpe_task:handle_task(Task,Curr,Curr,Proc);
          {[],_,_}     -> bpe_task:denied_flow(Curr,Proc);
          {List,_,[]}  -> bpe_task:handle_task(Task,Curr,bpe_task:find_flow(Stage,List),Proc);
@@ -62,8 +61,13 @@ process_task(Stage,Proc,NoFlow) ->
     io:format("Process: ~p Task: ~p Targets: ~p ~n",[Proc#process.id,Curr,Targets]),
     io:format("Target: ~p Status: ~p Reason: ~p~n",[Target,Status,Reason]),
 
+    case Curr /= Target of
+        true -> bpe_task:handle_starting_task(Target, Proc);
+        false -> skip
+    end,
+    
     NewProcState = ProcState#process{task = Target},
-    begin fix_reply({Status,{Reason,Target},NewProcState}) end.
+    fix_reply({Status,{Reason,Target},NewProcState}).
 
 fix_reply({stop,{Reason,Reply},State}) -> {stop,Reason,Reply,State};
 fix_reply(P) -> P.
