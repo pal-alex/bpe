@@ -9,24 +9,42 @@
 
 start_link(Parameters) -> gen_server:start_link(?MODULE, Parameters, []).
 
+append_doc(Form, Proc) when is_list(Form) == false -> append_doc([Form], Proc, true);
+append_doc(Forms, Proc) -> append_doc(Forms, Proc, true).
+
+append_doc(Form, Proc, AddHist) when is_list(Form) == false -> append_doc([Form], Proc, AddHist);
+append_doc(Forms, Proc, AddHist) ->
+    NewDocs = lists:foldl(fun(Form, Acc) -> 
+                                [Form | lists:filter(fun(X)-> is_tuple(X) andalso element(1, X) /= element(1, Form) end, Acc)]    
+                         end, Proc#process.docs, Forms),
+    NewProc = Proc#process{docs = NewDocs}, 
+    case AddHist of
+        true -> bpe:add_hist(NewProc);
+        false -> skip
+    end,
+    {reply, docs, NewProc}  
+.
+
 process_event(Event,Proc) ->
     EventName = element(#messageEvent.name,Event),
     Targets = bpe_task:targets(EventName,Proc),
 
     {Status,{Reason,Target},ProcState} = bpe_event:handle_event(Event,bpe_task:find_flow(Targets),Proc),
 
-    Key = "/bpe/hist/" ++ ProcState#process.id,
-    Writer = kvs:writer(Key),
+    % Key = "/bpe/hist/" ++ ProcState#process.id,
+    % Writer = kvs:writer(Key),
 
     % the reason we need compund keys here for id field
     % is that in mnesia backend all hist entries are stored in one table
     % so step position is not enough. For RocksDB you can use just writer.count.
 
-    kvs:append(#hist{ id = {Writer#writer.count,ProcState#process.id},
-                    name = [],
-                    time = calendar:local_time(),
-                    docs = ProcState#process.docs,
-                    task = { event, element(#messageEvent.name,Event) }}, Key),
+    % kvs:append(#hist{ id = {Writer#writer.count,ProcState#process.id},
+    %                 name = [],
+    %                 time = calendar:local_time(),
+    %                 docs = ProcState#process.docs,
+    %                 task = {event, element(#messageEvent.name,Event) }}, Key),
+    Task = {event, element(#messageEvent.name,Event) },
+    bpe:add_hist(ProcState, Task),
 
     io:format("Process: ~p Event: ~p Targets: ~p~n",[Proc#process.id,EventName,Targets]),
     io:format("Target: ~p Status: ~p Reason: ~p",[Target,Status,Reason]),
@@ -43,55 +61,76 @@ process_task(Stage,Proc,NoFlow) ->
                    _ -> bpe_task:targets(Curr,Proc) end,
 
     {Status,{Reason,Target},ProcState} = case {Targets,Proc#process.task,Stage} of
-         {noflow,_,_} -> {reply,{complete,Curr},Proc};
-         {[],[],_}  -> bpe_task:already_finished(Proc);
-         {[],Curr,_}  -> bpe_task:handle_task(Task,Curr,Curr,Proc);
-         {[],_,_}     -> bpe_task:denied_flow(Curr,Proc);
-         {List,_,[]}  -> bpe_task:handle_task(Task,Curr,bpe_task:find_flow(Stage,List),Proc);
-         {List,_,_}   -> {reply,{complete,bpe_task:find_flow(Stage,List)},Proc} end,
+                                                {noflow,_,_} -> {reply,{complete,Curr},Proc};
+                                                {[],[],_}    -> bpe_task:already_finished(Proc);
+                                                {[],Curr,_}  -> bpe_task:handle_task(Task,Curr,Curr,Proc);
+                                                {[],_,_}     -> bpe_task:denied_flow(Curr,Proc);
+                                                {List,_,[]}  -> bpe_task:handle_task(Task,Curr,bpe_task:find_flow(Stage,List),Proc);
+                                                {List,_,_}   -> {reply,{complete,bpe_task:find_flow(Stage,List)},Proc} 
+                                         end,
+    ProcId = ProcState#process.id,
+    NewProcState = ProcState#process{task = Target},                                         
 
-    Key = "/bpe/hist/" ++ProcState#process.id,
-    Writer = kvs:writer(Key),
-    kvs:append(#hist{   id = {Writer#writer.count,ProcState#process.id},
-                      name = [],
-                      time = calendar:local_time(),
-                      docs = ProcState#process.docs,
-                      task = {task, Target} }, Key),
+    % Key = "/bpe/hist/" ++ ProcId,
+    % Writer = kvs:writer(Key),
+    % kvs:append(#hist{   id = {Writer#writer.count,ProcState#process.id},
+    %                 name = [],
+    %                 time = calendar:local_time(),
+    %                 docs = ProcState#process.docs,
+    %                 task = {task, Target} }, Key),
 
-    io:format("Process: ~p Task: ~p Targets: ~p ~n",[Proc#process.id,Curr,Targets]),
-    io:format("Target: ~p Status: ~p Reason: ~p~n",[Target,Status,Reason]),
+    bpe:add_hist(NewProcState),
 
-    case Curr /= Target of
-        true -> bpe_task:handle_starting_task(Target, Proc);
-        false -> skip
-    end,
-    
-    NewProcState = ProcState#process{task = Target},
-    fix_reply({Status,{Reason,Target},NewProcState}).
+    io:format("Process: ~p Task: ~p Targets: ~p ~n",[ProcId, Curr, Targets]),
+
+    case Curr /= Target andalso (Stage == [] orelse Curr == 'Created') of
+            true -> bpe_task:handle_starting_task(Target, NewProcState); 
+            false -> fix_reply({Status,{Reason,Target},NewProcState})
+    end
+
+    % case Curr /= Target andalso (Stage == [] orelse Curr == 'Created') of
+    %     true -> bpe_task:handle_starting_task(Target, NewProcState); 
+    %     false -> skip
+    % end,
+    % fix_reply({Status,{Reason,Target},NewProcState})
+
+.
 
 fix_reply({stop,{Reason,Reply},State}) -> {stop,Reason,Reply,State};
 fix_reply(P) -> P.
 
-handle_call({get},            _,Proc) -> { reply,Proc,Proc };
-handle_call({run},            _,Proc) ->   run('Finish',Proc);
-handle_call({until,Stage},    _,Proc) ->   run(Stage,Proc);
-handle_call({event,Event},    _,Proc) ->   process_event(Event,Proc);
-handle_call({start},          _,Proc) ->   process_task([],Proc);
-handle_call({complete},       _,Proc) ->   process_task([],Proc);
-handle_call({complete,Stage}, _,Proc) ->   process_task(Stage,Proc);
-handle_call({amend,Form,true},_,Proc) ->   process_task([],Proc#process{docs=[Form]},true);
-handle_call({amend,Form},     _,Proc) ->   process_task([],Proc#process{docs=[Form]});
-handle_call({remove,Form},    _,Proc) ->   process_task([],Proc#process{docs=[
+handle_call({get},              _,Proc) -> { reply,Proc,Proc };
+handle_call({run},              _,Proc) ->   run('Finish',Proc);
+handle_call({until,Stage},      _,Proc) ->   run(Stage,Proc);
+handle_call({event,Event},      _,Proc) ->   process_event(Event,Proc);
+handle_call({start},            _,Proc) ->   process_task([],Proc);
+handle_call({complete},         _,Proc) ->   process_task([],Proc);
+handle_call({complete,Stage},   _,Proc) ->   process_task(Stage,Proc);
+handle_call({amend,Form,true},  _,Proc) ->   process_task([],Proc#process{docs=[Form]},true);
+handle_call({amend,Form},       _,Proc) ->   process_task([],Proc#process{docs=[Form]});
+handle_call({append_doc, Form}, _,Proc) ->   append_doc(Form, Proc);
+handle_call({remove,Form},      _,Proc) ->   process_task([],Proc#process{docs=[
                                          { remove,element(1,Form),element(2,Form)}]},true);
-handle_call(Command,_,Proc)           -> { reply,{unknown,Command},Proc }.
+handle_call(Command,_,Proc)             -> { reply,{unknown,Command},Proc }.
 
 init(Process) ->
-    Proc = bpe:load(Process#process.id,Process),
+    ProcId = Process#process.id,
+    Till = infinity,
+    % Till = bpe:till(calendar:local_time(), application:get_env(bpe,ttl,24*60*60)),
+    bpe:cache({process, ProcId},self(),Till),
+
+    Proc = bpe:load(ProcId, Process),
     io:format("Process ~p spawned as ~p.~n",[Proc#process.id,self()]),
-    Till = bpe:till(calendar:local_time(), application:get_env(bpe,ttl,24*60*60)),
-    bpe:cache({process,Proc#process.id},self(),Till),
+    
+   
     [ bpe:reg({messageEvent,element(1,EventRec),Proc#process.id}) || EventRec <- bpe:events(Proc) ],
-    {ok, Proc#process{timer=erlang:send_after(rand:uniform(10000),self(),{timer,ping})}}.
+    {ok, Proc}
+    % {ok, Proc#process{timer=erlang:send_after(rand:uniform(10000),self(),{timer,ping})}}
+    .
+
+handle_cast({starting, Stage}, Proc) ->
+    bpe_task:handle_starting_task(Stage, Proc)
+;
 
 handle_cast(Msg, State) ->
     io:format("Unknown API async: ~p.~n", [Msg]),
@@ -106,7 +145,7 @@ handle_info({timer,ping}, State=#process{task=Task,timer=Timer,id=Id,events=Even
 
     Terminal= case lists:keytake(Wildcard,#messageEvent.name,Events) of
                    {value,Event,_} -> {Wildcard,element(1,Event),element(#messageEvent.timeout,Event)};
-                             false -> {Wildcard,boundaryEvent,{5,ping()}} end,
+                             false -> {Wildcard,boundaryEvent,{99999,ping()}} end,
 
     {Name,Record,{Days,Pattern}} = case lists:keytake(Task,#messageEvent.name,Events) of
                                        {value,Event2,_} -> {Task,element(1,Event2),element(#messageEvent.timeout,Event2)};
@@ -115,7 +154,8 @@ handle_info({timer,ping}, State=#process{task=Task,timer=Timer,id=Id,events=Even
 
     {DD,Diff} = case bpe:head(Id) of
                      #hist{time=Time1} -> calendar:time_difference(Time1,Time2);
-                                     _ -> {immediate,timeout} end,
+                                    [] -> {immediate, deleted};
+                                     _ -> {immediate, timeout} end,
 
 %   io:format("Ping: ~p, Task: ~p Hist: ~p~n", [Id,Task,Hist]),
 
@@ -126,11 +166,12 @@ handle_info({timer,ping}, State=#process{task=Task,timer=Timer,id=Id,events=Even
             case process_task([],State) of
                 {reply,_,NewState} -> {noreply,NewState#process{timer=timer_restart(ping())}};
                 {stop,normal,_,NewState} -> {stop,normal,NewState} end;
-        {false,_} -> io:format("BPE ~p: closing Timeout.~nDiff: ~p.~n",[Id,{DD,Diff}]),
+        {false, _} -> io:format("BPE ~p: clearing spawn and cache (~nDiff: ~p).~n",[Id, {DD,Diff}]),
             case is_pid(Pid) of
                 true -> Pid ! {direct,{bpe,terminate,{Name,{Days,Pattern}}}};
-                false -> skip end,
-            bpe:cache({process,Id},undefined),
+                false ->  bpe:cache({process,Id},undefined) 
+            end,
+           
             {stop,normal,State} end;
 
 handle_info({'DOWN', _MonitorRef, _Type, _Object, _Info} = Msg, State = #process{id=Id}) ->
@@ -139,11 +180,11 @@ handle_info({'DOWN', _MonitorRef, _Type, _Object, _Info} = Msg, State = #process
     {stop, normal, State};
 
 handle_info(Info, State=#process{}) ->
-    io:format("Unrecognized info: ~p", [Info]),
+    io:format("Unrecognized info: ~p~n", [Info]),
     {noreply, State}.
 
 terminate(Reason, #process{id=Id}) ->
-    io:format("Terminating session Id cache: ~p~n Reason: ~p", [Id,Reason]),
+    io:format("Terminating session Id cache: ~p~n Reason: ~p~n", [Id,Reason]),
     spawn(fun() -> supervisor:delete_child(bpe_otp,Id) end),
     bpe:cache({process,Id},undefined),
     ok.
@@ -162,3 +203,6 @@ transient(#process{docs=Docs}=Process) ->
     Process#process{docs=lists:filter(
         fun (X) -> not lists:member(element(1,X),
             application:get_env(bpe,transient,[])) end,Docs)}.
+
+
+ 
