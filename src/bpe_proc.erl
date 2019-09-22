@@ -110,8 +110,12 @@ handle_call({event,Event},      _,Proc) ->   process_event(Event,Proc);
 handle_call({start},            _,Proc) ->   process_task([],Proc);
 handle_call({complete},         _,Proc) ->   process_task([],Proc);
 handle_call({complete,Stage},   _,Proc) ->   process_task(Stage,Proc);
-handle_call({amend,Form,true},  _,Proc) ->   process_task([],Proc#process{docs=[Form]},true);
-handle_call({amend,Form},       _,Proc) ->   process_task([],Proc#process{docs=[Form]});
+
+handle_call({modify,Form,append},_,Proc) -> process_task([],bpe_env:append(env,Proc,Form),true);
+handle_call({modify,Form,remove},_,Proc) -> process_task([],bpe_env:remove(env,Proc,Form),true);
+handle_call({amend,Form},        _,Proc) -> process_task([],bpe_env:append(env,Proc,Form));
+handle_call({discard,Form},      _,Proc) -> process_task([],bpe_env:remove(env,Proc,Form));
+
 handle_call({append_doc, Form}, _,Proc) ->   append_doc(Form, Proc);
 handle_call({remove,Form},      _,Proc) ->   process_task([],Proc#process{docs=[
                                          { remove,element(1,Form),element(2,Form)}]},true);

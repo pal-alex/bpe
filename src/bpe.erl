@@ -122,9 +122,9 @@ run(ProcId)               -> gen_server:call(find_pid(ProcId),{run},            
 until(ProcId,Task)        -> gen_server:call(find_pid(ProcId),{until,Task},     ?TIMEOUT).
 amend(ProcId,Form)        -> gen_server:call(find_pid(ProcId),{amend,Form},     ?TIMEOUT).
 amend(ProcId,Form,noflow) -> gen_server:call(find_pid(ProcId),{amend,Form,true},?TIMEOUT).
-
 append_doc(ProcId, Form)  -> gen_server:call(find_pid(ProcId),{append_doc, Form}, ?TIMEOUT).
-
+discard(ProcId,Form)      -> gen_server:call(pid(ProcId),{discard,Form},   ?TIMEOUT).
+modify(ProcId,Form,Arg)   -> gen_server:call(pid(ProcId),{modify,Form,Arg},?TIMEOUT).
 event(ProcId,Event)       -> gen_server:call(find_pid(ProcId),{event,Event},    ?TIMEOUT).
 
 start_task(ProcId) ->
@@ -197,12 +197,13 @@ step(Name, Proc) ->
          [] -> #task{};
          E -> E end.
 
-doc(RecordName, Proc) when is_atom(RecordName) -> doc({RecordName}, Proc);
-doc(Rec, Proc) ->
-    case [ Doc || Doc <- docs(Proc), element(1,Doc) == element(1,Rec)] of
-         [D] -> D;
-         [] -> [];
-         E -> E end.
+doc (R, Proc) -> {X, _Y} = bpe_env:find(env, Proc, R), case X of [A] -> A; _ -> X end.
+% doc(RecordName, Proc) when is_atom(RecordName) -> doc({RecordName}, Proc);
+% doc(Rec, Proc) ->
+%     case [ Doc || Doc <- docs(Proc), element(1,Doc) == element(1,Rec)] of
+%          [D] -> D;
+%          [] -> [];
+%          E -> E end.
 
 docs  (Proc) -> Proc#process.docs.
 tasks (Proc) -> Proc#process.tasks.
@@ -226,6 +227,7 @@ val(Document,Proc,Cond,Action) ->
          ErrorList -> io:format("BPE:val/4 failed: ~tp~n",[ErrorList]),
                       {{reply,ErrorList},Proc#process.task,Proc} end.
 
+pid(Id) -> bpe:cache({process,Id}).
 cache(Key, undefined) -> ets:delete(processes,Key);
 cache(Key, Value) -> cache(Key, Value, till(calendar:local_time(), ttl())).
 
