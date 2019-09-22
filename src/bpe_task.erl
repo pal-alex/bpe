@@ -25,8 +25,8 @@ already_finished(Proc) ->
     {stop,{normal,[]},Proc}.
 
 task_action(Module,CurrentTask,Target,Proc) ->
-    case Module:action({request,CurrentTask},Proc) of
-         {run,State}                  -> bpe_proc:run('Final',State);
+    case Module:action({complete,CurrentTask},Proc) of
+         {run,State}                  -> bpe_proc:run(final,State);
          {until,Task,State}           -> bpe_proc:run(Task,State);
          {reply,State}                -> {reply,{complete,Target},State};
          {error,Message,Task,State}   -> {reply,{error,Message,Task},State};
@@ -53,14 +53,24 @@ handle_task(_,_,Target,Proc) ->
 
 
 handle_starting_task(Curr, Proc) ->
-    
     Task = bpe:step(Curr, Proc),
     Module = element(3, Task),
-    case is_atom(Module) of
-    true -> % io:format("handle_starting_task in a module ~p for a task ~p and a proc_id = ~p~n", [Module, Curr, Proc#process.id]),
-                Module:action({starting, Curr}, Proc);
-       false -> % io:format("Didn't find a module ~p for a task ~p and a proc_id = ~p~n", [Module, Curr, Proc#process.id]),
-                {reply, {started, Curr}, Proc}
-    end
+    Reply = case is_atom(Module) of
+                true -> %io:format("handle_starting_task in a module ~p for a task ~p and a proc_id = ~p~n", [Module, Curr, Proc#process.id]),
+                        try Module:action({start, Curr}, Proc) of
+                            {reply, {complete, Curr}, Proc} -> bpe_proc:process_task([], Proc);    %task_action(Module,Curr,Curr,Proc);
+                            {reply, {complete, Target}, Proc} -> bpe_proc:run(Target, Proc);
+                            {reply, Proc} -> {reply, {started, Curr}, Proc};
+                            {reply, Curr, Proc} -> {reply, {started, Curr}, Proc};
+                            R -> R
+                        catch
+                            error:undef -> {reply, {started, Curr}, Proc};
+                            error:function_clause -> {reply, {started, Curr}, Proc}
+
+                        end;
+                false -> %io:format("Didn't find a module ~p for a task ~p and a proc_id = ~p~n", [Module, Curr, Proc#process.id]),
+                        {reply, {started, Curr}, Proc}
+            end,
+    Reply
 .
 

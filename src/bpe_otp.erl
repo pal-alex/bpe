@@ -10,13 +10,15 @@ stop(_)      -> ok.
 opt()        -> [ set, named_table, { keypos, 1 }, public ].
 respawn()    -> spawn(fun () -> [ worker(I) || I <- kvs:feed("/bpe/proc")] end).
 start(_,_)   -> 
-                [ bpe:reload(I) || I <- application:get_env(bpe,procmodules,[bpe, bpe_proc, bpe_task]) ],
-                syn:init(), kvs:join(), kvs:ensure(kvs:writer("/bpe/proc")),
+                % [ bpe:reload(I) || I <- application:get_env(bpe,procmodules,[bpe, bpe_proc, bpe_task]) ],
+                io:format("started supervisor bpe_otp~n", []),
+                syn:init(), 
+                % kvs:join(), kvs:ensure(kvs:writer("/bpe/proc")),
                 X = supervisor:start_link({local, ?MODULE}, ?MODULE, []), respawn(), X.
 init([])     -> [ ets:new(T,opt()) || T <- [ processes ] ],
                 { ok, { { one_for_one, 5, 10 }, [] } }.
 
-worker(#process{id=Id}=Proc) ->
+worker(Proc0) when is_tuple(Proc0) ->
 
 %    case bpe:head(Id) of
         % #hist{time = Time} -> worker_do(calendar:time_difference(Time,calendar:local_time()),P);
@@ -24,8 +26,8 @@ worker(#process{id=Id}=Proc) ->
         % _ -> broken 
 %      end
 
-        {_,{_, T}} = bpe:current_task(Id),
-        bpe:start(Proc#process{task=T}, [])
+        Proc = bpe:restore_stage(Proc0),
+        bpe:start(Proc, [])
 ;
 worker(P) -> io:format("Unknown: ~p~n",[P]).
 

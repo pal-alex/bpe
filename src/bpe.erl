@@ -9,80 +9,97 @@
 % -define(TIMEOUT, 600).
 
 load(Id) -> load(Id, []).
-load(Id, _Def) ->
-    io:format("load bpe/proc with id = ~p~n", [Id]),
+load(Id, Def) ->
     case kvs:get("/bpe/proc",Id) of
-        %  {error,_} -> Def;
-         {ok,Proc} -> {_,{_,T}, D} = current_proc_data(Id),
-                      Proc#process{task = T, docs = D} 
+         {error,_} -> case Def /= [] of
+                        true -> io:format("Didn't find bpe/proc with id = ~p, loaded def~n", [Id]), Def
+                      end;
+         {ok,Proc} -> io:format("load bpe/proc with id = ~p~n", [Id]),
+                      {_, {_,T}, D} = current_proc_data(Id),
+                      case T of
+                          [] -> Proc;
+                           _ -> Proc#process{task = T, docs = D} 
+                      end
     end
 .
 
 cleanup(P) ->
   [ kvs:delete("/bpe/hist",Id) || #hist{id=Id} <- bpe:hist(P) ],
     kvs:delete(writer,"/bpe/hist/" ++ P),
-    kvs:delete("/bpe/proc",P).
+    kvs:delete("/bpe/proc",P)
+  .
 
-current_task(Id) ->
-    case bpe:head(Id) of
-         [] -> {0, {task, 'Created'}};
-         #hist{id={H,_},task=T} -> {H,T} end.
+get_task(ProcId) -> 
+    Proc = bpe:load(ProcId),
+    Proc#process.task
+.
+% current_task(Id) ->
+%     case bpe:head(Id) of
+%          [] -> {0, {task, []}};
+%          #hist{id={H,_},task=T} -> {H,T} end.
+                    
 
-current_proc_data(Id) ->
+current_proc_data(Id) -> 
     case bpe:head(Id) of
-            [] -> {0, {task, 'Created'}, []};
-            #hist{id={H,_},task=T,docs=D} -> {H,T,D} 
-    end.
+            [] -> {0, {task, []}, []};
+            #hist{id={H,_}, task=T, docs=D} -> {H, T, D} 
+    end
+.
             
 
 
 start(Proc0, Options) -> start(Proc0, Options, []).
 start(Proc0, Options, Docs) when is_list(Docs) == false -> start(Proc0, Options, [Docs]);
-start(Proc0, Options, Docs) -> 
+start(Proc0, Options, Docs0) -> 
     Id   = case Proc0#process.id of [] -> kvs:seq([],[]); X -> X end,
-    {Hist, Task, CurrentDocs} = current_proc_data(Id),
-    HistDocs = case Hist of
+    {Hist, T, D} = current_proc_data(Id),
+    {Task, Docs} = case Hist of
                     0 -> Key  = "/bpe/hist/" ++ Id,
                          kvs:ensure(#writer{id=Key}),
-                         Docs;
-                    _ -> CurrentDocs
+                         {{task, Proc0#process.beginEvent}, Docs0};
+                    _ -> {T, D}
                 end,
 
     Pid  = proplists:get_value(notification,Options,undefined),
-    Proc = Proc0#process{id=Id,task= element(2,Task), options = Options,notifications = Pid, started=calendar:local_time(), docs = HistDocs},
+    Proc = Proc0#process{id=Id, task=element(2,Task), options=Options, notifications=Pid, started=calendar:local_time(), docs=Docs},
 
     kvs:append(Proc, "/bpe/proc"),
-    add_hist(Proc),
-    % kvs:append(#hist{ id = {Hist,Id},
-    %                 name = Proc#process.name,
-    %                 time = Proc#process.started,
-    %                 docs = Proc#process.docs,
-    %                 task = Task}, Key),
-
+    % add_hist(Proc),
+    % case Hist of
+    %     0 -> add_hist(Proc);
+    %     _ -> skip
+    % end,
+    
     Restart = transient,
     Shutdown = ?TIMEOUT,
     ChildSpec = { Id,
                   {bpe_proc, start_link, [Proc]},
                   Restart, Shutdown, worker, [bpe_proc] },
-
+    io:format("start a child with id = ~p~n", [Id]),
     Result = case supervisor:start_child(bpe_otp, ChildSpec) of
-                {ok,_}    -> {ok,Proc#process.id};
-                {ok,_,_}  -> {ok,Proc#process.id};
+                {ok,_} -> {ok,Proc#process.id};
+                {ok,_,_} -> {ok,Proc#process.id};
                 {error, already_present} -> {ok, Proc#process.id};
                 {error, {already_started, _}} -> {ok, Proc#process.id}
                 % {error, Error} -> {{error, Error}, Proc#process.id} 
           end,
+
+    % case Hist of
+    %         0 -> bpe:add_hist(Proc),
+    %              bpe_task:handle_starting_task(Task, Proc);
+    %         _ -> skip
+    % end,
     Result
 .
 
-finish_created(Proc_Id) ->
-    {Hist, _Task} = current_task(Proc_Id),
-        case Hist of
-                % a new bp
-                0 -> bpe:complete('Created', Proc_Id);
-                _V -> skip
-        end
-.
+% finish_created(Proc_Id) ->
+%     {Hist, _Task} = current_task(Proc_Id),
+%         case Hist of
+%                 % a new bp
+%                 0 -> bpe:complete('Created', Proc_Id);
+%                 _V -> skip
+%         end
+% .
 
 
 
@@ -95,7 +112,7 @@ complete(ProcId)          -> complete([], ProcId).
 complete(Stage,ProcId)    -> Pid = find_pid(ProcId),
     case Pid of
         undefined -> io:format("undefined Pid for ProcId = ~p~n", [ProcId]),
-                     Proc = restore_stage(ProcId, []),
+                     Proc = restore_stage(ProcId),
                      {reply, not_completed, Proc}
             ;
         _ -> gen_server:call(Pid,{complete,Stage}, ?TIMEOUT)
@@ -111,14 +128,15 @@ append_doc(ProcId, Form)  -> gen_server:call(find_pid(ProcId),{append_doc, Form}
 event(ProcId,Event)       -> gen_server:call(find_pid(ProcId),{event,Event},    ?TIMEOUT).
 
 start_task(ProcId) ->
-    start_task(ProcId, [])
+    Task = get_task(ProcId),
+    start_task(ProcId, Task)
 .
 
 start_task(ProcId, Task) ->
     Pid = find_pid(ProcId),
     case Pid of
         undefined -> io:format("(start_task) undefined Pid for ProcId = ~p~n", [ProcId]);
-        _ -> gen_server:cast(Pid, {starting, Task})
+        _ -> gen_server:cast(Pid, {start, Task})
     end
 .
 
@@ -129,12 +147,19 @@ delete_tasks(Proc, Tasks) ->
 
 % BPE for now supports only MNESIA and ROCKS backends.
 
-restore_stage(ProcId, Options) ->
-    {_Hist, Task, Docs} = current_proc_data(ProcId),
-        Pid  = proplists:get_value(notification, Options, undefined),
-        Proc0 = kvs:get_value('/bpe/proc', ProcId),
-        Proc = Proc0#process{id=ProcId, task = element(2,Task), options = Options, notifications = Pid, started=calendar:local_time(), docs = Docs},
-        Proc
+restore_stage(Proc0) when is_tuple(Proc0) ->
+    ProcId = Proc0#process.id,
+    {_Hist, T, Docs} = current_proc_data(ProcId),
+    Task = case T of
+                      {task, []} -> {task, Proc0#process.task};
+                      _ -> T
+                   end,
+    Proc = Proc0#process{id=ProcId, task=element(2,Task), started=calendar:local_time(), docs=Docs},
+    Proc
+;
+restore_stage(ProcId) ->
+    Proc0 = kvs:get_value('/bpe/proc', ProcId),
+    restore_stage(Proc0)
 .
 
 head(ProcId) ->
@@ -251,18 +276,16 @@ reload(Module) ->
 add_hist(Proc) -> add_hist(Proc, []).
 add_hist(Proc, T) ->
         ProcId = Proc#process.id,
-        Docs = Proc#process.docs,
         Task = case T of
-                    [] -> Curr = Proc#process.task,    
-                            {task, Curr};
+                    [] -> {task, Proc#process.task};
                     _ -> T 
                 end,
         Key = "/bpe/hist/" ++ ProcId,
 
         Writer = kvs:writer(Key),
         kvs:append(#hist{id = {Writer#writer.count, ProcId},
-                        name = [],
+                        name = Proc#process.name,
                         time = calendar:local_time(),
-                        docs = Docs,
+                        docs = Proc#process.docs,
                         task = Task}, Key)
 .

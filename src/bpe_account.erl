@@ -8,7 +8,6 @@
 def() ->
     #process { name = 'IBAN Account',
         flows = [
-            #sequenceFlow{source='Created',   target='Init'},
             #sequenceFlow{source='Init',      target='Upload'},
             #sequenceFlow{source='Upload',    target='Payment'},
             #sequenceFlow{source='Payment',   target=['Signatory','Process']},
@@ -25,28 +24,29 @@ def() ->
         endEvent = 'Final',
         events = [ #messageEvent{name='PaymentReceived'} ] }.
 
-action({request,'Created'}, Proc) ->
+action({starting, Stage = 'Init'}, Proc) ->
+        {reply, Proc};
+        
+
+action({complete,'Init'}, Proc) ->
     {reply,Proc};
 
-action({request,'Init'}, Proc) ->
-    {reply,Proc};
-
-action({request,'Payment'}, Proc) ->
+action({complete,'Payment'}, Proc) ->
     Payment = bpe:doc({payment_notification},Proc),
     case Payment of
          [] -> {reply,'Process',Proc#process{docs=[#tx{}]}};
           _ -> {reply,'Signatory',Proc} end;
 
-action({request,'Signatory'}, Proc) ->
+action({complete,'Signatory'}, Proc) ->
     {reply,'Process',Proc};
 
-action({request,'Process'}, Proc) ->
+action({complete,'Process'}, Proc) ->
     case bpe:doc(#close_account{},Proc) of
          #close_account{} -> {reply,'Final',Proc};
                         _ -> {reply,Proc} end;
 
-action({request,'Upload'}, Proc) ->
+action({complete,'Upload'}, Proc) ->
     {reply,Proc};
 
-action({request,'Final'}, Proc) ->
+action({complete,'Final'}, Proc) ->
     {reply,Proc}.

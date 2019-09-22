@@ -60,7 +60,7 @@ process_task(Stage,Proc,NoFlow) ->
                    true -> noflow;
                    _ -> bpe_task:targets(Curr,Proc) end,
 
-    {Status,{Reason,Target},ProcState} = case {Targets,Proc#process.task,Stage} of
+    {Status,{Reason,Target},ProcState} = case {Targets, Curr, Stage} of
                                                 {noflow,_,_} -> {reply,{complete,Curr},Proc};
                                                 {[],[],_}    -> bpe_task:already_finished(Proc);
                                                 {[],Curr,_}  -> bpe_task:handle_task(Task,Curr,Curr,Proc);
@@ -84,7 +84,11 @@ process_task(Stage,Proc,NoFlow) ->
     io:format("Process: ~p Task: ~p Targets: ~p ~n",[ProcId, Curr, Targets]),
 
     case Curr /= Target andalso (Stage == [] orelse Curr == 'Created') of
-            true -> bpe_task:handle_starting_task(Target, NewProcState); 
+            true -> {S_Status,{S_Reason, S_Target}, S_ProcState} = bpe_task:handle_starting_task(Target, NewProcState),
+                    case S_Reason of
+                        started -> fix_reply({S_Status,{S_Reason, S_Target}, S_ProcState});
+                        complete -> process_task([], S_ProcState) 
+                    end; 
             false -> fix_reply({Status,{Reason,Target},NewProcState})
     end
 
@@ -100,7 +104,7 @@ fix_reply({stop,{Reason,Reply},State}) -> {stop,Reason,Reply,State};
 fix_reply(P) -> P.
 
 handle_call({get},              _,Proc) -> { reply,Proc,Proc };
-handle_call({run},              _,Proc) ->   run('Finish',Proc);
+handle_call({run},              _,Proc) ->   run(final,Proc);
 handle_call({until,Stage},      _,Proc) ->   run(Stage,Proc);
 handle_call({event,Event},      _,Proc) ->   process_event(Event,Proc);
 handle_call({start},            _,Proc) ->   process_task([],Proc);
@@ -120,16 +124,30 @@ init(Process) ->
     bpe:cache({process, ProcId},self(),Till),
 
     Proc = bpe:load(ProcId, Process),
-    io:format("Process ~p spawned as ~p.~n",[Proc#process.id,self()]),
-    
-   
-    [ bpe:reg({messageEvent,element(1,EventRec),Proc#process.id}) || EventRec <- bpe:events(Proc) ],
-    {ok, Proc}
+    io:format("Process ~p spawned as ~p.~n",[ProcId, self()]),
+    % New_Proc = case bpe:head(ProcId) of
+    %                 [] -> bpe:add_hist(Proc),
+    %                     %   {_,_,StartedProc} = bpe_task:handle_starting_task(Proc#process.task, Proc),
+    %                     {_,_,StartedProc} = bpe:start_task(ProcId),
+    %                       StartedProc;
+    %                 _ -> Proc
+    %             end,
+    New_Proc = Proc,
+    case bpe:head(ProcId) of
+        [] -> bpe:add_hist(Proc),
+            %   {_,_,StartedProc} = bpe_task:handle_starting_task(Proc#process.task, Proc),
+            bpe:start_task(ProcId, Proc#process.task);
+        _ -> skip
+    end,
+
+    [ bpe:reg({messageEvent,element(1,EventRec),New_Proc#process.id}) || EventRec <- bpe:events(New_Proc) ],
+    {ok, New_Proc}
     % {ok, Proc#process{timer=erlang:send_after(rand:uniform(10000),self(),{timer,ping})}}
     .
 
-handle_cast({starting, Stage}, Proc) ->
-    bpe_task:handle_starting_task(Stage, Proc)
+handle_cast({start, Stage}, Proc) ->
+    {_,_,NewProc} = bpe_task:handle_starting_task(Stage, Proc),
+    {noreply, NewProc}
 ;
 
 handle_cast(Msg, State) ->
@@ -192,6 +210,7 @@ terminate(Reason, #process{id=Id}) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
+run(final, Process) -> run(Process#process.endEvent, Process);
 run(Task,Process) ->
     CurrentTask = Process#process.task,
     case bpe_proc:process_task([],Process,false) of
