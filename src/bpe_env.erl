@@ -1,7 +1,7 @@
 -module(bpe_env).
 -author('Maxim Sokhatsky').
 -include("bpe.hrl").
--export([append/3,find/3,remove/3]).
+-export([append/3,append/4,append/5,find/3,remove/3]).
 
 append(kvs, Feed, Rec) ->
   kvs:append(Rec, Feed);
@@ -14,6 +14,25 @@ append(env, Proc, Rec) ->
   end,
   kvs:append(S, Feed),
   S.
+
+append(env, Proc, Key, Value) -> append(env, Proc, Key, Value, false).
+append(env, Proc, Key, Value, Modify) ->
+  Feed = "/bpe/proc",
+  {Found, Rest} = find(env, Proc, Key),
+  Docs = case {Found, Modify} of
+             {{Key, [_H|T]}, true} -> [{Key, [Value|T]}|Rest];
+             {{Key, List}, false} -> [{Key, [Value|List]}|Rest]; 
+                          {[], _} -> [{Key, [Value]}|Rest]
+              
+        end,
+  S = Proc#process{docs = Docs},
+  kvs:append(S, Feed),
+  S.
+
+
+find(Rec, Feed) when is_atom(Rec) ->
+    lists:partition(fun (R) -> (element(1,R) == Rec) end, Feed)
+;
 
 find(Rec,Feed) ->
   Zip = [ {X,Y} || {X,Y} <- lists:zip(lists:seq(1,size(Rec)),

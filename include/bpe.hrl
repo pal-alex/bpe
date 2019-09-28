@@ -36,8 +36,21 @@
 -record(beginEvent,   { ?REQ}).
 -record(endEvent,     { ?REQ}).
 
--record(sequenceFlow, { source=[] :: [] | atom(),
+-record(sequenceFlow, { ?REQ,
+                        condition=[] :: term(),
+                        source=[] :: [] | atom(),
                         target=[] :: [] | atom() | list(atom()) }).
+
+-record(gateway,      { ?REQ,
+                        type= none :: gate()
+                        }).
+
+-record(bpe_task, {id,
+                    name,
+                    module,
+                    type,
+                    docs}).
+
 
 -type histId() :: [] | integer() | {atom()|string(),any()}.
 
@@ -48,13 +61,15 @@
                         next=[] :: [] | integer(),
                         feeds=[] :: list(),
                         name=[] :: [] | binary(),
-                        task=[] :: [] | atom() | {atom()|string(),any()},
+                        task=[] :: [] | #bpe_task{}, %atom() | {atom()|string(),any()},
+                        stage=start  :: start|finish|idle,
                         docs=[] :: list(tuple()),
                         time=[] :: term() }).
 
 -type tasks()  :: #task{} | #serviceTask{} | #userTask{} | #receiveTask{} | #beginEvent{} | #endEvent{}.
 -type events() :: #messageEvent{} | #boundaryEvent{} | #timeoutEvent{}.
 -type procId() :: [] | integer() | {atom(),any()}.
+-type gate()   :: none | exclusive | parallel | inclusive | complex | event.
 
 -record(process,      { id = [] :: procId(),
                         container=feed :: [] | atom(),
@@ -71,13 +86,16 @@
                         rules      = [] :: [] | term(),
                         docs       = [] :: list(tuple()),
                         options    = [] :: term(),
-                        task       = 'Created' :: [] | atom(),
+                        % started_tasks = [] | list(#bpe_task{}),
                         timer      = [] :: [] | reference(),
                         notifications=[] :: [] | term(),
                         result     = [] :: [] | binary(),
                         started    = [] :: [] | calendar:datetime(),
                         beginEvent = [] :: [] | atom(),
                         endEvent   = [] :: [] | atom()}).
+
+
+
 
 % BPE API
 
