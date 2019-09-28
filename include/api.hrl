@@ -16,7 +16,7 @@
 
 % find task or document in process
 
--spec step(Name::list(),#process{}) -> [tuple()] | tuple().
+% -spec step(Name::list(),#process{}) -> [tuple()] | tuple().
 -spec doc(Record::tuple(),#process{}) -> [tuple()] | tuple().
 
 % retrieve process field
