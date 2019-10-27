@@ -7,52 +7,59 @@
 % BPMN 2.0 API
 -define(REQ, name=[] :: [] | atom(),
              module=[] :: [] | atom(),
-             prompt=[] :: list(tuple())).
+             prompt=[] :: list(tuple())
+             ).
+-define(TASK, ?REQ,
+              roles=[] :: list(atom()),
+              etc=[] :: term() ).
 
--record(task,         { ?REQ,
-                        roles=[] :: [] | binary() }).
--record(userTask,     { ?REQ,
-                        roles=[] :: [] | binary() }).
--record(serviceTask,  { ?REQ,
-                        roles=[] :: [] | binary() }).
--record(receiveTask,  { ?REQ,
-                        roles=[] :: [] | binary() }).
+-record(timeout,      { spec= [] :: term() }).
+-define(EVENT, ?REQ, 
+                payload=[] :: [] | binary(),
+                timeout=[] :: [] | #timeout{}).
+-define(CYCLIC, timeDate=[] :: [] | binary(),
+                timeDuration=[] :: [] | binary(),
+                timeCycle=[] :: [] | binary() ).
 
--record(messageEvent, { ?REQ,
-                        payload=[] :: [] | binary(),
-                        timeout=[] :: [] | {integer(),{integer(),integer(),integer()}} }).
--record(boundaryEvent,{ ?REQ,
-                        payload=[] :: [] | binary(),
-                        timeout=[] :: {integer(),{integer(),integer(),integer()}},
-                        timeDate=[] :: [] | binary(),
-                        timeDuration=[] :: [] | binary(),
-                        timeCycle=[] :: [] | binary() }).
--record(timeoutEvent, { ?REQ,
-                        payload=[] :: [] | binary(),
-                        timeout=[] :: [] | {integer(),{integer(),integer(),integer()}},
-                        timeDate=[] :: [] | binary(),
-                        timeDuration=[] :: [] | binary(),
-                        timeCycle=[] :: [] | binary() }).
--record(beginEvent,   { ?REQ}).
--record(endEvent,     { ?REQ}).
+-type procId() :: [] | integer() | {atom(),any()}.
+-type gate()   :: exclusive | parallel | inclusive | complex | event.
+-type histId() :: [] | integer() | {atom()|string(),any()}.
+
+-record(beginEvent,   { ?TASK }).
+-record(endEvent,     { ?TASK }).
+-record(task,         { ?TASK }).
+-record(userTask,     { ?TASK }).
+-record(serviceTask,  { ?TASK }).
+-record(receiveTask,  { ?TASK }).
+-type tasks()  :: #task{} | #serviceTask{} | #userTask{} | #receiveTask{} | #beginEvent{} | #endEvent{}.
+
+
+-record(messageEvent, { ?EVENT }).
+-record(boundaryEvent,{ ?EVENT, ?CYCLIC }).
+-record(timeoutEvent, { ?EVENT, ?CYCLIC }).
+-type events() :: #messageEvent{} | #boundaryEvent{} | #timeoutEvent{}.
+
 
 -record(sequenceFlow, { ?REQ,
                         condition=[] :: term(),
                         source=[] :: [] | atom(),
-                        target=[] :: [] | atom() | list(atom()) }).
+                        target=[] :: [] | atom() }).
 
--record(gateway,      { ?REQ,
-                        type= none :: gate()
+-record(gateway,      { ?TASK,
+                        type= parallel :: gate(),
+                        in=[] :: list(atom()),
+                        out=[] :: list(atom())
                         }).
 
 -record(bpeTask, {id,
                     name,
                     module,
                     type,
-                    docs}).
+                    docs = [],
+                    created
+                }).
 
 
--type histId() :: [] | integer() | {atom()|string(),any()}.
 
 -record(hist,         { id = [] :: histId(),
                         container=feed :: [] | atom(),
@@ -61,15 +68,12 @@
                         next=[] :: [] | integer(),
                         feeds=[] :: list(),
                         name=[] :: [] | binary(),
-                        task=[] :: [] | #bpeTask{}, %atom() | {atom()|string(),any()},
+                        task=[] :: [] | #bpeTask{}, 
                         stage=start  :: start|finish|idle,
-                        docs=[] :: list(tuple()),
-                        time=[] :: term() }).
+                        time=[] :: term()
+                      }).
 
--type tasks()  :: #task{} | #serviceTask{} | #userTask{} | #receiveTask{} | #beginEvent{} | #endEvent{}.
--type events() :: #messageEvent{} | #boundaryEvent{} | #timeoutEvent{}.
--type procId() :: [] | integer() | {atom(),any()}.
--type gate()   :: none | exclusive | parallel | inclusive | complex | event.
+
 
 -record(process,      { id = [] :: procId(),
                         container=feed :: [] | atom(),
@@ -86,11 +90,11 @@
                         rules      = [] :: [] | term(),
                         docs       = [] :: list(tuple()),
                         options    = [] :: term(),
-                        % started_tasks = [] | list(#bpeTask{}),
                         timer      = [] :: [] | reference(),
                         notifications=[] :: [] | term(),
                         result     = [] :: [] | binary(),
                         started    = [] :: [] | calendar:datetime(),
+                        finished   = [] :: [] | calendar:datetime(),
                         beginEvent = [] :: [] | atom(),
                         endEvent   = [] :: [] | atom()}).
 

@@ -12,12 +12,24 @@ load(Id, Def) ->
     case kvs:get("/bpe/proc",Id) of
          {error,_} -> case Def /= [] of
                         true -> io:format("Didn't find bpe/proc with id = ~p, loaded def~n", [Id]), 
-                                Def
+                                Def;
+                        false -> load_arc(Id)
                       end;
          {ok,Proc} -> io:format("load bpe/proc with id = ~p~n", [Id]),
                       Proc
     end
 .
+load_arc(Id) ->
+    case kvs:get("/bpe/archive", Id) of
+         {error, _} -> io:format("Didn't find bpe/archive with id = ~p~n", [Id]), 
+                      [];
+                        
+         {ok, Proc} -> io:format("load bpe/archive with id = ~p~n", [Id]),
+                      Proc
+    end
+.
+
+
 
 test() -> io:format("test 17~n", []).
 
@@ -30,31 +42,58 @@ cleanup(P) ->
 
 task(ProcId, TaskName) -> 
     Proc = bpe:load(ProcId),
-    Tasks = Proc#process.tasks,
-    case lists:filter(fun(T) -> element(2, T) == TaskName end, Tasks) of
-        [] -> [];
-        [T] -> T
+    bpe:step(TaskName, Proc)
+.
+step(TaskName, Proc) -> 
+    case [ Task || Task <- tasks(Proc), element(2, Task) == TaskName] of
+         [T] -> T;
+         [] -> []
     end
 .
+
 % .
 % current_task(Id) ->
 %     case bpe:head(Id) of
 %          [] -> {0, {task, []}};
 %          #hist{id={H,_},task=T} -> {H,T} end.
                     
+get_significant_history(Hist) ->
+    SH = lists:foldl(fun(H, Acc) ->
+                        T = H#hist.task,
+                        TId = T#bpeTask.id,
+                        TName = T#bpeTask.name,
+                        Existed = lists:any(fun(H0) ->
+                                                    T0 = H0#hist.task,
+                                                    T0#bpeTask.id == TId andalso T0#bpeTask.name == TName
+                                            end, Acc),
+                        case Existed of
+                            true -> Acc;
+                            false -> [H|Acc]
+                        end
+                    end, [], Hist),
+    SH
+.
 
-current_tasks(Id) -> 
-    Hist = bpe:hist(Id),
+current_tasks(ProcId) -> 
+    Hist = bpe:hist(ProcId),
     % {N,T}, где N - мин или макс? номер среди запущенных в истории или [], если история пустая, -1 - если нет запущенных задач (все завершенные?), 
     %            T - запущенные задачи}
+    % Result = case Hist of
+    %                 [] -> {[], []};
+    %                 _ -> lists:foldl(fun(#hist{stage=Stage, task = Task, id = {N,_}}, {_, Tasks} = Acc) ->
+    %                                             case Stage /= finish of
+    %                                                 true -> {N, [Task|Tasks]};
+    %                                                 false -> Acc
+    %                                             end
+    %                                         end, {-1, []}, Hist)
+    %         end,
+    % Result
+
     Result = case Hist of
-                    [] -> {[], []};
-                    _ -> lists:foldl(fun(#hist{stage=Stage, task = Task, id = {N,_}}, {_, Tasks} = Acc) ->
-                                                case Stage /= finish of
-                                                    true -> {N, [Task|Tasks]};
-                                                    false -> Acc
-                                                end
-                                            end, {-1, []}, Hist)
+                  [] -> {[], []};
+                   _ -> SH = get_significant_history(Hist),
+                        FH = lists:filter(fun(H) -> H#hist.stage /= finish end, SH),
+                        lists:foldl(fun(#hist{task = Task, id = {N, _}}, {_, Tasks}) -> {N, [Task|Tasks]} end, {-1, []}, FH)
             end,
     Result
 .
@@ -119,6 +158,7 @@ find_pid(Id) -> bpe:cache({process,Id}).
 proc(ProcId)              -> Pid = find_pid(ProcId),
     gen_server:call(Pid,{get},            ?TIMEOUT).
 
+
 complete(ProcId)          -> complete([], ProcId).
 complete(Stage,ProcId)    -> Pid = find_pid(ProcId),
     case Pid of
@@ -133,7 +173,7 @@ complete(Stage,ProcId)    -> Pid = find_pid(ProcId),
 % until(ProcId,Task)        -> gen_server:call(find_pid(ProcId),{until,Task},     ?TIMEOUT).
 amend(ProcId,Form)        -> gen_server:call(find_pid(ProcId),{amend,Form},     ?TIMEOUT).
 amend(ProcId,Form,noflow) -> gen_server:call(find_pid(ProcId),{amend,Form,true},?TIMEOUT).
-append_doc(ProcId, Form)  -> gen_server:call(find_pid(ProcId),{append_doc, Form}, ?TIMEOUT).
+% append_doc(ProcId, Form)  -> gen_server:call(find_pid(ProcId),{append_doc, Form}, ?TIMEOUT).
 discard(ProcId,Form)      -> gen_server:call(pid(ProcId),{discard,Form},   ?TIMEOUT).
 modify(ProcId,Form,Arg)   -> gen_server:call(pid(ProcId),{modify,Form,Arg},?TIMEOUT).
 event(ProcId,Event)       -> gen_server:call(find_pid(ProcId),{event,Event},    ?TIMEOUT).
@@ -187,11 +227,7 @@ source(Name, Proc) ->
          E -> E end.
 
 % step(Proc) -> step(Proc#process.task, Proc).
-% step(Name, Proc) -> 
-%     case [ Task || Task <- tasks(Proc), element(#task.name,Task) == Name] of
-%          [T] -> T;
-%          [] -> #task{};
-%          E -> E end.
+
 
 doc (R, Proc) -> {X, _Y} = bpe_env:find(env, Proc, R), case X of [A] -> A; _ -> X end.
 % doc(RecordName, Proc) when is_atom(RecordName) -> doc({RecordName}, Proc);
@@ -213,7 +249,38 @@ new_task(Proc,GivenTask) ->
         [] -> Proc#process{tasks=[GivenTask|Proc#process.tasks]};
          _ -> {error,exist,Existed} end.
 
-delete(_Proc) -> ok.
+get_task({HId, ProcId}) when is_integer(ProcId) ->
+    get_task({HId, integer_to_list(ProcId)});
+get_task(HistId = {_HId, ProcId}) ->
+    % Hist = bpe:hist(ProcId),
+    Key = "/bpe/hist/" ++ ProcId,
+    H = kvs:get_value(Key, HistId),
+    Task = H#hist.task,
+    Task
+.
+
+finish_process(Proc) when is_tuple(Proc) ->
+    ProcId = Proc#process.id,
+    finish_process(Proc, ProcId);
+finish_process(ProcId) ->
+    Proc = load(ProcId),
+    finish_process(Proc, ProcId)
+.
+finish_process(Proc0, ProcId) ->
+    case bpe:current_tasks(ProcId) of
+        {-1, []} -> % copy to archive
+                    Feed = "/bpe/proc",
+                    FeedArc = "/bpe/archive",
+                    Proc = Proc0#process{finished = calendar:local_time()},
+                    kvs:append(Proc, FeedArc),
+                    kvs:delete(Feed, ProcId),
+                    % TODO: terminate process and not infinity life for archive processes
+                    {stop, finish, Proc};
+        {_N, _StartedTasks} -> {reply, not_all_finished, Proc0}
+    end
+.     
+
+% delete(_Proc) -> ok.
 
 % val(Document,Proc,Cond) -> val(Document,Proc,Cond,fun(_,_)-> ok end).
 % val(Document,Proc,Cond,Action) ->
@@ -271,15 +338,15 @@ reload(Module) ->
             {load_error, Module, Reason}
     end.
 
-trace(Proc, Task, Stage, Docs) -> 
+trace(Proc, Tasks, Stage) when is_list(Tasks) ->
+    lists:foreach(fun(T) -> trace(Proc, T, Stage) end, Tasks);
+trace(Proc, Task, Stage) -> 
         ProcId = Proc#process.id,
         Key = "/bpe/hist/" ++ ProcId,
         Writer = kvs:writer(Key),
         kvs:append(#hist{id = {Writer#writer.count, ProcId},
                         name = Proc#process.name,
                         time = calendar:local_time(),
-                        % docs = Proc#process.docs,
                         stage = Stage,
-                        docs = Docs,
                         task = Task}, Key)
 .
