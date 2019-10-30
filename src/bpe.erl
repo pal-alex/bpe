@@ -56,15 +56,16 @@ step(TaskName, Proc) ->
 %     case bpe:head(Id) of
 %          [] -> {0, {task, []}};
 %          #hist{id={H,_},task=T} -> {H,T} end.
-                    
-get_significant_history(Hist) ->
+
+get_significant_history(Hist) -> get_significant_history(Hist, false).
+get_significant_history(Hist, CheckOnlyId) ->
     SH = lists:foldl(fun(H, Acc) ->
                         T = H#hist.task,
                         TId = T#bpeTask.id,
                         TName = T#bpeTask.name,
                         Existed = lists:any(fun(H0) ->
                                                     T0 = H0#hist.task,
-                                                    T0#bpeTask.id == TId andalso T0#bpeTask.name == TName
+                                                    T0#bpeTask.id == TId andalso (CheckOnlyId orelse T0#bpeTask.name == TName)
                                             end, Acc),
                         case Existed of
                             true -> Acc;

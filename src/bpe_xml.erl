@@ -4,29 +4,70 @@
 -compile(export_all).
 -import(lists,[keyfind/3, keyreplace/4]).
 
-attr(E) -> [ {N,V} || #xmlAttribute{name=N,value=V} <- E].
+attr(E) -> [ {N,V} || #xmlAttribute{name=N, value=V} <- E].
 
-find(E=[#xmlText{}, #xmlElement{name='bpmn:conditionExpression'} | _],[]) ->
-  [{X,[V],attr(A)} || #xmlElement{name=X,attributes=A,content=[#xmlText{value=V}]} <- E];
+find(E=[#xmlText{}, #xmlElement{name='bpmn:conditionExpression'} | _], []) ->
+  [{X, [V], attr(A)} || #xmlElement{name=X, attributes=A, content=[#xmlText{value=V}]} <- E];
 %%It is expected that bpmn:flowNodeRef are present only in bpmn:lane and only #xmlText{} and #xmlElement{name='bpmn:flowNodeRef'} are present there 
-find(E=[#xmlText{}, #xmlElement{name='bpmn:flowNodeRef'} | _],[]) ->
-  [{X,[],{value,V}} || #xmlElement{name=X,content=[#xmlText{value=V}]} <- E];
-find(E,[]) -> [{X,find(Sub,[]),attr(A)} || #xmlElement{name=X,attributes=A,content=Sub} <- E];
+find(E=[#xmlText{}, #xmlElement{name='bpmn:flowNodeRef'} | _], []) ->
+  [{X, [], {value, V}} || #xmlElement{name=X, content=[#xmlText{value=V}]} <- E];
+find(E, []) -> [{X,find(Sub,[]),attr(A)} || #xmlElement{name=X,attributes=A,content=Sub} <- E];
 find(E, I) -> [{X,find(Sub,[]),attr(A)} || #xmlElement{name=X,attributes=A,content=Sub} <- E, X == I].
 
 def() -> load("priv/sample.bpmn").
 
+nextTask(Acc, Flows, Task, EndEvent) when Task == EndEvent orelse Flows == [] -> Acc;
+nextTask(Acc, Flows, Task, EndEvent) -> 
+  % io:format("acc before ~p task=~p~n", [Acc,Task]),
+  {F, Other} = lists:partition(fun(F0) -> F0#sequenceFlow.source == Task end, Flows),
+  IsTask = lists:any(fun(T) -> T==Task end, Acc), 
+  AccT = case IsTask of
+          true -> Acc;
+          false -> [Task|Acc]
+        end,
+  % io:format("next acc ~p~n", [AccT]),
+  lists:foldl(fun(F0, Acc0) -> nextTask(Acc0, Other, F0#sequenceFlow.target, EndEvent) end, AccT, F)
+.
+
+load_proc(File, Module) ->
+    {ok,Bin} = file:read_file(File),
+    {#xmlElement{name='bpmn:definitions', content = C}, _} = xmerl_scan:string(binary_to_list(Bin)),
+    [{'bpmn:process', Elements, Attrs}] = find(C, 'bpmn:process'),
+    Name = list_to_atom(proplists:get_value(id, Attrs)),
+    Proc = reduce(Elements,#process{name=Name},Module),
+    Proc
+.
+  
+
 load(File) -> load(File, ?MODULE).
 
 load(File,Module) ->
-  {ok,Bin} = file:read_file(File),
-  _Y = {#xmlElement{name=N,content=C}=_X,_} = xmerl_scan:string(binary_to_list(Bin)),
-  _E = {'bpmn:definitions',[{'bpmn:process',Elements,Attrs}],_} = {N,find(C,'bpmn:process'),attr(C)},
-  Name = list_to_atom(proplists:get_value(id,Attrs)),
-  Proc = reduce(Elements,#process{name=Name},Module),
+  % {ok,Bin} = file:read_file(File),
+  % {#xmlElement{name='bpmn:definitions', content = C}, _} = xmerl_scan:string(binary_to_list(Bin)),
+  
+  % _E = {'bpmn:definitions', [{'bpmn:process', Elements, Attrs}], _} = {N, find(C, 'bpmn:process'), attr(C)},
+  
+  % [{'bpmn:process', Elements, Attrs}] = find(C, 'bpmn:process'),
+  % io:format("load_1: ~p~n", [C]),
+
+  % Name = list_to_atom(proplists:get_value(id, Attrs)),
+  % Proc = reduce(Elements,#process{name=Name},Module),
+  Proc = load_proc(File, Module),
   Tasks = Proc#process.tasks,
+  io:format("tasks before: ~p~n", [Tasks]),
+  Flows = Proc#process.flows,
+  % BeginEvent = list_to_atom(Proc#process.beginEvent),
+  % EndEvent = list_to_atom(Proc#process.endEvent),
+  BeginEvent = Proc#process.beginEvent,
+  EndEvent = Proc#process.endEvent,
+  SortTasks0 = nextTask([BeginEvent], Flows, BeginEvent, EndEvent),
+  SortTasks = lists:reverse(lists:map(fun(ST) -> 
+                                          lists:keyfind(ST, 2, Tasks)
+                                        end, [Proc#process.endEvent | SortTasks0])),
+  io:format("load_1: ~p~n", [SortTasks]),
+
   % Tasks = fillInOut(Proc#process.tasks, Proc#process.flows),
-  Tasks1 = fixRoles(Tasks, Proc#process.roles),
+  Tasks1 = fixRoles(SortTasks, Proc#process.roles),
   Proc#process{ id=[],
                 tasks = Tasks1,
                 roles=[],
@@ -112,7 +153,8 @@ fillInOut(Tasks, [#sequenceFlow{name=Name,source=Source,target=Target}|Flows]) -
 
 key_push_value(Value, ValueKey, ElemId, ElemIdKey, List) ->
   Elem = keyfind(ElemId, ElemIdKey, List),
-  RecName = hd(tuple_to_list(Elem)),
+  io:format("~p - ~p - ~p~n", [ElemId, ElemIdKey, List]),
+  RecName = element(1, Elem),
   if 
     RecName == beginEvent -> List;
     RecName == endEvent -> List;

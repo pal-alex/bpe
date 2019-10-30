@@ -1,4 +1,5 @@
 -module(bpe_gate).
+% -export([action/5]).
 -compile(export_all).
 -include("bpe.hrl").
 
@@ -12,6 +13,24 @@ action(inclusive, Module, Stage, Task, Proc) ->
         true -> bpe_task:task_action(Module, Stage, Tasks, Proc);
         false -> {reply, {idle, Task}, Proc}
     end
+;
+action(exclusive, _Module, _Stage, Task, Proc) ->
+    TaskName = Task#bpeTask.name,
+    Flows = Proc#process.flows,
+    Conditions = [{F#sequenceFlow.condition, F#sequenceFlow.target} || F <- Flows, F#sequenceFlow.source == TaskName],
+    Target = lists:foldl(fun({Cond, Target0}, Acc) ->
+                    case Acc of
+                        true -> Acc;
+                        false -> evaluate_expression(Cond),
+                                 Target0
+                    end             
+                end, [], Conditions),
+    case Target of
+        [] -> bpe:trace(Proc, Task, idle),
+              {reply, {idle, Task}, Proc};
+        _ ->  bpe:trace(Proc, Task, finish),
+              bpe_task:process_task(start, Target, Proc)
+    end
 .
 
 %инклюзивность проверяется только на один уровень выше
@@ -21,7 +40,7 @@ get_inclusive_tasks(Task, Proc) ->
     Flows = Proc#process.flows,
     Inputs = [F#sequenceFlow.source || F <- Flows, F#sequenceFlow.target == TaskName],
     History = bpe:hist(Proc#process.id),
-    SH = get_significant_history(History),
+    SH = bpe:get_significant_history(History, true),
     {IsInclusive, FinishedTasks} = lists:foldl(fun(H, Acc = {IsInclusive0, FinishedTasks0}) ->
                                                     T0 = H#hist.task,
                                                     Stage0 = H#hist.stage,
@@ -39,18 +58,8 @@ get_inclusive_tasks(Task, Proc) ->
     
 .
 
-
-get_significant_history(History) -> 
-    lists:foldl(fun(H, Acc) ->
-                    T = H#hist.task,
-                    TId = T#bpeTask.id,
-                    Existed = lists:any(fun(H0) ->
-                                            T0 = H0#hist.task,
-                                            T0#bpeTask.id == TId
-                                        end, Acc),
-                    case Existed of
-                        true -> Acc;
-                        false -> [H|Acc]
-                    end
-                end, [], History)
-.
+evaluate_expression(Expression) ->
+    {ok, Tokens, _} = erl_scan:string(Expression),    % scan the code into tokens
+    {ok, Parsed} = erl_parse:parse_exprs(Tokens),     % parse the tokens into an abstract form
+    {value, Result, _} = erl_eval:exprs(Parsed, []),  % evaluate the expression, return the value
+    Result.

@@ -27,12 +27,12 @@ handle_tasks(Stage, Tasks, Proc) ->
 process_task(Stage, Task=#bpeTask{module = Module}, Proc) ->
     {Kind, Type} = Task#bpeTask.type,
     case {Kind, Type} of
-        {gateway, inclusive} -> bpe_gate:action(inclusive, Module, Stage, Task, Proc);
-                           _ -> case Stage of
-                                    start -> bpe:trace(Proc, Task, Stage);        
-                                        _ -> skip
-                                end,
-                                task_action(Module, Stage, Task, Proc)
+        {gateway, Type} when Type /= parallel -> bpe_gate:action(Type, Module, Stage, Task, Proc);
+                                            _ -> case Stage of
+                                                            start -> bpe:trace(Proc, Task, Stage);        
+                                                                _ -> skip
+                                                 end,
+                                                 task_action(Module, Stage, Task, Proc)
     end          
 .
 
