@@ -39,17 +39,21 @@ cleanup(P) ->
     kvs:delete(writer,"/bpe/hist/" ++ P),
     kvs:delete("/bpe/proc",P)
   .
-
+task(Tasks, TaskName) when is_list(Tasks) ->
+    case [ Task || Task <- Tasks, element(2, Task) == TaskName] of
+        [T] -> T;
+        [] -> []
+    end;
 task(ProcId, TaskName) -> 
     Proc = bpe:load(ProcId),
     bpe:step(TaskName, Proc)
 .
 step(TaskName, Proc) -> 
-    case [ Task || Task <- tasks(Proc), element(2, Task) == TaskName] of
-         [T] -> T;
-         [] -> []
-    end
+    Tasks = tasks(Proc),
+    bpe:task(Tasks, TaskName)
 .
+
+
 
 % .
 % current_task(Id) ->
@@ -77,19 +81,6 @@ get_significant_history(Hist, CheckOnlyId) ->
 
 current_tasks(ProcId) -> 
     Hist = bpe:hist(ProcId),
-    % {N,T}, где N - мин или макс? номер среди запущенных в истории или [], если история пустая, -1 - если нет запущенных задач (все завершенные?), 
-    %            T - запущенные задачи}
-    % Result = case Hist of
-    %                 [] -> {[], []};
-    %                 _ -> lists:foldl(fun(#hist{stage=Stage, task = Task, id = {N,_}}, {_, Tasks} = Acc) ->
-    %                                             case Stage /= finish of
-    %                                                 true -> {N, [Task|Tasks]};
-    %                                                 false -> Acc
-    %                                             end
-    %                                         end, {-1, []}, Hist)
-    %         end,
-    % Result
-
     Result = case Hist of
                   [] -> {[], []};
                    _ -> SH = get_significant_history(Hist),
@@ -136,7 +127,7 @@ start(Proc0, Options, Docs0) ->
     ChildSpec = { Id,
                   {bpe_proc, start_link, [Proc]},
                   Restart, Shutdown, worker, [bpe_proc] },
-    io:format("start a child with id = ~p~n", [Id]),
+    % io:format("start a child with id = ~p~n", [Id]),
     Result = case supervisor:start_child(bpe_otp, ChildSpec) of
                 {ok,_} -> {ok,Proc#process.id};
                 {ok,_,_} -> {ok,Proc#process.id};
@@ -144,11 +135,6 @@ start(Proc0, Options, Docs0) ->
                 {error, {already_started, _}} -> {ok, Proc#process.id}
                 % {error, Error} -> {{error, Error}, Proc#process.id} 
           end,
-
-    % case N0 of
-    %     [] -> spawn(fun() -> bpe:complete() end)
-    %     _ -> skip
-    % end,
 
     Result
 .

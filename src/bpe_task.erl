@@ -2,6 +2,7 @@
 -author('Maxim Sokhatsky').
 -compile(export_all).
 -include("bpe.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 process_tasks(Proc) -> 
     ProcId = Proc#process.id,
@@ -21,16 +22,21 @@ process_tasks(Proc) ->
 . 
 
 handle_tasks(Stage, Tasks, Proc) -> 
-            lists:foldl(fun(T, {_, _, Proc0}) -> bpe_task:process_task(Stage, T, Proc0) end, {[], [], Proc}, Tasks).
+    % Если на вход список на старт, то вначале его весь в трэйс, чтобы инклюзив гейты работали корректно
+    case Stage of
+        start -> lists:foreach(fun(Task) -> bpe:trace(Proc, Task, Stage) end, Tasks);        
+            _ -> skip
+    end,
+    lists:foldl(fun(T, {_, _, Proc0}) -> bpe_task:process_task(Stage, T, Proc0, false) end, {[], [], Proc}, Tasks).
 
-
-process_task(Stage, Task=#bpeTask{module = Module}, Proc) ->
+process_task(Stage, Task, Proc) -> bpe_task:process_task(Stage, Task, Proc, true).
+process_task(Stage, Task=#bpeTask{module = Module}, Proc, IsTrace) ->
     {Kind, Type} = Task#bpeTask.type,
     case {Kind, Type} of
         {gateway, Type} when Type /= parallel -> bpe_gate:action(Type, Module, Stage, Task, Proc);
-                                            _ -> case Stage of
-                                                            start -> bpe:trace(Proc, Task, Stage);        
-                                                                _ -> skip
+                                            _ -> case {Stage, IsTrace} of
+                                                      {start, true} -> bpe:trace(Proc, Task, Stage);        
+                                                                  _ -> skip
                                                  end,
                                                  task_action(Module, Stage, Task, Proc)
     end          
@@ -39,6 +45,8 @@ process_task(Stage, Task=#bpeTask{module = Module}, Proc) ->
        
 task_action(Module, Stage, Task, Proc) ->
     {StageAfter, TaskAfter, ProcAfter} = Module:action(Stage, Task, Proc),
+    ?assert(TaskAfter /= []),    
+
     Result = case StageAfter of
                 start -> case is_equal(Task, TaskAfter) of
                           {true, true} -> bpe:trace(ProcAfter, TaskAfter, idle),
@@ -81,25 +89,38 @@ finish_task(Task, Proc) ->
 .
 
 
-get_next_tasks(Task, Proc) ->
-    Name = Task#bpeTask.name,
-    Flows = Proc#process.flows,
-    lists:foldl(fun(F, Acc) ->
-                    case F#sequenceFlow.source == Name of
-                        true -> Targets = [ T || T <- Proc#process.tasks, element(2, T) == F#sequenceFlow.target],
-                                BPE_Tasks = lists:map(fun(T) -> 
-                                                            Type = case element(1, T) of
-                                                                    gateway -> {gateway, T#gateway.type};
-                                                                    Type0 -> {task, Type0}
-                                                                end,
-                                                            bpe_task:new(element(2, T), Type, element(3, T), Task#bpeTask.docs)
-                                                            
-                                                        end, Targets),
-                                lists:append(BPE_Tasks, Acc);
-                        false -> Acc
-                    end
-                end, [], Flows)
-  .
+get_next_tasks(Task, Proc) -> get_next_tasks(Task, Proc, []).
+    
+get_next_tasks(Task, Proc, TaskNameAfter) ->
+        Name = Task#bpeTask.name,
+        Flows = Proc#process.flows,
+        Targets0 = lists:foldl(fun(F, Acc) ->
+                        TargetName = case TaskNameAfter of
+                                        [] ->  F#sequenceFlow.target;
+                                        _ -> TaskNameAfter
+                                    end,
+                        case F#sequenceFlow.source == Name of
+                            true -> case lists:member(TargetName, Acc) of
+                                        true -> Acc;
+                                        false -> [TargetName|Acc]
+                                    end;
+                            false -> Acc
+                        end
+                    end, [], Flows),
+        lists:foldl(fun(TargetName, Acc) -> 
+                        Targets = [ T || T <- Proc#process.tasks, element(2, T) == TargetName],
+                        BPE_Tasks = lists:map(fun(T) -> 
+                                            Type = case element(1, T) of
+                                                    gateway -> {gateway, T#gateway.type};
+                                                    Type0 -> {task, Type0}
+                                                end,
+                                            bpe_task:new(element(2, T), Type, element(3, T), Task#bpeTask.docs)
+                                        end, Targets),
+                        lists:append(BPE_Tasks, Acc)
+                    end, [], Targets0) 
+    
+.
+
 
 new(Name, Type, Module, Docs) ->
     #bpeTask{id = kvs:seq([],[]), 

@@ -47,6 +47,7 @@
 
 -record(gateway,      { ?TASK,
                         type= parallel :: gate(),
+                        condition=[] :: term(),
                         in=[] :: list(atom()),
                         out=[] :: list(atom())
                         }).

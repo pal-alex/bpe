@@ -77,6 +77,11 @@ remove(kvs, Feed, Rec) ->
   {X, _Y} = find(kvs, Feed, Rec),
   lists:map(fun(I) -> kvs:delete(Feed,element(2,I)) end, X);
 
+remove(task, Task, Rec) ->
+    {_Found, Docs} = find(task, Task, Rec),
+    Task#bpeTask{docs = Docs}
+;
+
 remove(env,Proc,Rec) ->
   {_X, Y} = find(env, Proc, Rec),
   S=Proc#process{docs=Y},

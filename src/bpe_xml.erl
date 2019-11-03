@@ -4,6 +4,8 @@
 -compile(export_all).
 -import(lists,[keyfind/3, keyreplace/4]).
 
+test() -> io:format("test 1", []).
+
 attr(E) -> [ {N,V} || #xmlAttribute{name=N, value=V} <- E].
 
 find(E=[#xmlText{}, #xmlElement{name='bpmn:conditionExpression'} | _], []) ->
@@ -34,6 +36,7 @@ load_proc(File, Module) ->
     {#xmlElement{name='bpmn:definitions', content = C}, _} = xmerl_scan:string(binary_to_list(Bin)),
     [{'bpmn:process', Elements, Attrs}] = find(C, 'bpmn:process'),
     Name = list_to_atom(proplists:get_value(id, Attrs)),
+    % io:format("~p~n", [Elements]),
     Proc = reduce(Elements,#process{name=Name},Module),
     Proc
 .
@@ -54,7 +57,7 @@ load(File,Module) ->
   % Proc = reduce(Elements,#process{name=Name},Module),
   Proc = load_proc(File, Module),
   Tasks = Proc#process.tasks,
-  io:format("tasks before: ~p~n", [Tasks]),
+  % io:format("tasks before: ~p~n", [Tasks]),
   Flows = Proc#process.flows,
   % BeginEvent = list_to_atom(Proc#process.beginEvent),
   % EndEvent = list_to_atom(Proc#process.endEvent),
@@ -64,7 +67,7 @@ load(File,Module) ->
   SortTasks = lists:reverse(lists:map(fun(ST) -> 
                                           lists:keyfind(ST, 2, Tasks)
                                         end, [Proc#process.endEvent | SortTasks0])),
-  io:format("load_1: ~p~n", [SortTasks]),
+  % io:format("load_1: ~p~n", [SortTasks]),
 
   % Tasks = fillInOut(Proc#process.tasks, Proc#process.flows),
   Tasks1 = fixRoles(SortTasks, Proc#process.roles),
@@ -104,7 +107,8 @@ reduce([{'bpmn:sequenceFlow',Body,Attrs}|T],#process{flows=Flows} = Process, Mod
   Target = list_to_atom(proplists:get_value(targetRef,Attrs)),
   Name   = list_to_atom(get_sequenceFlow_name(Source, Target)),
   F = #sequenceFlow{name=Name,source=Source,target=Target},
-  io:format("Flow = ~p~n", [ Flow = reduce(Body,F,Module)]),
+  Flow = reduce(Body,F,Module),
+  % io:format("Flow = ~p~n", [ Flow ]),
   reduce(T,Process#process{flows=[Flow|Flows]}, Module);
 
 reduce([{'bpmn:conditionExpression',Body,_Attrs}|T],#sequenceFlow{} = Flow, Module) ->
@@ -116,9 +120,11 @@ reduce([{'bpmn:parallelGateway',_Body,Attrs}|T],#process{tasks=Tasks} = Process,
   Name = list_to_atom(proplists:get_value(id,Attrs)),
   reduce(T,Process#process{tasks=[#gateway{module=Module,name=Name,type=parallel}|Tasks]}, Module);
 
-reduce([{'bpmn:exclusiveGateway',_Body,Attrs}|T],#process{tasks=Tasks} = Process, Module) ->
+reduce([{'bpmn:exclusiveGateway', Body, Attrs}|T],#process{tasks=Tasks} = Process, Module) ->
   Name = list_to_atom(proplists:get_value(id,Attrs)),
-  reduce(T,Process#process{tasks=[#gateway{module=Module,name=Name,type=exclusive}|Tasks]}, Module);
+  Condition = get_condition(Body),
+  reduce(T,Process#process{tasks=[#gateway{module=Module,name=Name, condition = Condition, type=exclusive}|Tasks]}, Module);
+
 
 reduce([{'bpmn:inclusiveGateway',_Body,Attrs}|T],#process{tasks=Tasks} = Process, Module) ->
   Name = list_to_atom(proplists:get_value(id,Attrs)),
@@ -153,7 +159,7 @@ fillInOut(Tasks, [#sequenceFlow{name=Name,source=Source,target=Target}|Flows]) -
 
 key_push_value(Value, ValueKey, ElemId, ElemIdKey, List) ->
   Elem = keyfind(ElemId, ElemIdKey, List),
-  io:format("~p - ~p - ~p~n", [ElemId, ElemIdKey, List]),
+  % io:format("~p - ~p - ~p~n", [ElemId, ElemIdKey, List]),
   RecName = element(1, Elem),
   if 
     RecName == beginEvent -> List;
@@ -174,6 +180,29 @@ fixRoles(Tasks, [Lane|Lanes]) ->
 update_roles([], AllTasks, _Role) -> AllTasks;
 update_roles([TaskId|Rest], AllTasks, Role) ->
   update_roles(Rest,key_push_value(Role, #task.roles, TaskId, #task.name, AllTasks),Role).
+
+get_condition([]) -> [];
+get_condition([{'bpmn:extensionElements', [BH|BT], _Attrs}|_T]) ->
+      case get_condition(BH) of
+        [] -> get_condition(BT);
+        Value -> Value
+      end;  
+get_condition({'camunda:properties', [BH|BT], _Attrs}) ->
+      case get_condition(BH) of
+        [] -> get_condition(BT);
+        Value -> Value
+      end;  
+get_condition({'camunda:property', _Body0, Attrs}) ->
+        Name = proplists:get_value(name, Attrs),
+        case Name of
+          "condition" -> proplists:get_value(value, Attrs);
+          _ -> []
+        end;
+        
+get_condition(Body=[{_, _Body0, _Attrs}|T]) ->
+    get_condition(T)
+.
+
 
 action({request,_,_},P) -> {reply,P}.
 

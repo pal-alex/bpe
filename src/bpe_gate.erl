@@ -2,6 +2,7 @@
 % -export([action/5]).
 -compile(export_all).
 -include("bpe.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 action(inclusive, Module, Stage, Task, Proc) ->
     % # 1.0) проверить, что нет незавершенных входящих flow - bpe_proc?
@@ -13,23 +14,37 @@ action(inclusive, Module, Stage, Task, Proc) ->
         true -> bpe_task:task_action(Module, Stage, Tasks, Proc);
         false -> {reply, {idle, Task}, Proc}
     end
+    % case {IsInclusive, Tasks} of
+    %     {true, []} -> bpe_task:task_action(Module, Stage, Task, Proc); 
+    %     {true, _} -> bpe_task:task_action(Module, Stage, Tasks, Proc);
+    %     false -> {reply, {idle, Task}, Proc}
+    % end
 ;
-action(exclusive, _Module, _Stage, Task, Proc) ->
+action(exclusive, Module, _Stage, Task, Proc) ->
     TaskName = Task#bpeTask.name,
     Flows = Proc#process.flows,
-    Conditions = [{F#sequenceFlow.condition, F#sequenceFlow.target} || F <- Flows, F#sequenceFlow.source == TaskName],
-    Target = lists:foldl(fun({Cond, Target0}, Acc) ->
-                    case Acc of
-                        true -> Acc;
-                        false -> evaluate_expression(Cond),
-                                 Target0
-                    end             
-                end, [], Conditions),
-    case Target of
-        [] -> bpe:trace(Proc, Task, idle),
-              {reply, {idle, Task}, Proc};
-        _ ->  bpe:trace(Proc, Task, finish),
-              bpe_task:process_task(start, Target, Proc)
+    Tasks = Proc#process.tasks,
+    Conditions = [{list_to_atom(F#sequenceFlow.condition), F#sequenceFlow.target} || F <- Flows, F#sequenceFlow.source == TaskName],
+    Gate = lists:keyfind(TaskName, 2, Tasks),
+    case Gate#gateway.condition of
+        [] -> io:format("Gateway ~p without condition! Can't lookup suitable sequenceFlow", [Gate]),
+             {reply, {idle, Task}, Proc};
+        _ -> Function = list_to_atom(Gate#gateway.condition),
+             Target = lists:foldl(fun({Cond, Target0}, Acc) ->
+                            case Acc of
+                                [] -> case apply(Module, Function, [Task, Proc]) == Cond of
+                                            true -> Target0;
+                                            false -> []
+                                      end;
+                                _ -> Acc
+                            end             
+                        end, [], Conditions),
+              case Target of
+                    [] -> bpe:trace(Proc, Task, idle),
+                        {reply, {idle, Task}, Proc};
+                    _ ->  bpe:trace(Proc, Task, finish),
+                        bpe_task:handle_tasks(start, bpe_task:get_next_tasks(Task, Proc, Target), Proc)
+              end
     end
 .
 
@@ -38,22 +53,34 @@ get_inclusive_tasks(Task, Proc) ->
     TaskName = Task#bpeTask.name,
     TaskType = Task#bpeTask.type,
     Flows = Proc#process.flows,
-    Inputs = [F#sequenceFlow.source || F <- Flows, F#sequenceFlow.target == TaskName],
+    Inputs = lists:usort([F#sequenceFlow.source || F <- Flows, F#sequenceFlow.target == TaskName]),
     History = bpe:hist(Proc#process.id),
     SH = bpe:get_significant_history(History, true),
-    {IsInclusive, FinishedTasks} = lists:foldl(fun(H, Acc = {IsInclusive0, FinishedTasks0}) ->
-                                                    T0 = H#hist.task,
-                                                    Stage0 = H#hist.stage,
-                                                    TaskName0 = T0#bpeTask.name,
-                                                    Res = lists:member(TaskName0, Inputs),
-                                                    case {Res, Stage0} of
-                                                        {true, finish} -> {IsInclusive0, [T0#bpeTask{name = TaskName, type = TaskType}|FinishedTasks0]};
-                                                        {false, _} -> Acc;
-                                                        {true, _} -> {false, FinishedTasks0}
-                                                    end
-                                            end, {true, []}, SH),
-    % IsInclusive = IsInclusive1 and (length(FinishedTasks) == length(Inputs)),                   
-%TODO: проверка, что среди Inputs нет таска, который не попал в SH
+    ShortHist = 'Elixir.BPE.Ext':get_short_history(SH),
+    io:format("get_inclusive_tasks task in = ~p~n short history: ~n~p~n", [TaskName, ShortHist]),
+    {AllOtherFinished, FinishedTasks, FinishedNamesUnsorted} = lists:foldl(fun(H, {AllOtherFinished0, FinishedTasks0, FinishedNames0}) ->
+                                                                    T0 = H#hist.task,
+                                                                    Stage0 = H#hist.stage,
+                                                                    TaskName0 = T0#bpeTask.name,
+                                                                    AllOtherFinished1 = case {AllOtherFinished0, Stage0, TaskName0 == TaskName} of
+                                                                                                {false, _, _} -> false;
+                                                                                                {_, finish, _} -> true;
+                                                                                                {_, _, true} -> AllOtherFinished0;
+                                                                                                {_, _, _} -> false
+                                                                                        end,
+                                                                    
+                                                                    Res = lists:member(TaskName0, Inputs),
+                                                                    case {Res, Stage0} of
+                                                                         {true, finish} -> {AllOtherFinished1, [T0#bpeTask{name = TaskName, type = TaskType}|FinishedTasks0], [TaskName0|FinishedNames0]};
+                                                                          _ -> {AllOtherFinished1, FinishedTasks0, FinishedNames0}
+                                                                    end
+                                                end, {[], [], []}, SH),
+    FinishedNames = lists:usort(FinishedNamesUnsorted),
+    Delta = lists:subtract(Inputs, FinishedNames),
+    IsInclusive = (Delta == [] orelse AllOtherFinished) andalso (FinishedTasks /= []),
+    FinishedTasksQty = length(FinishedTasks),
+    ?assert(IsInclusive == true andalso (FinishedTasksQty == length(Inputs) orelse AllOtherFinished) orelse IsInclusive == false),
+    io:format("get_inclusive_tasks is inclusive - ~p~n finished tasks qty ~p~n", [IsInclusive, FinishedTasksQty]),
     {IsInclusive, FinishedTasks}
     
 .
