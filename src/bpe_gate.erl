@@ -78,9 +78,9 @@ get_inclusive_tasks(Task, Proc) ->
     FinishedNames = lists:usort(FinishedNamesUnsorted),
     Delta = lists:subtract(Inputs, FinishedNames),
     IsInclusive = (Delta == [] orelse AllOtherFinished) andalso (FinishedTasks /= []),
-    FinishedTasksQty = length(FinishedTasks),
-    ?assert(IsInclusive == true andalso (FinishedTasksQty == length(Inputs) orelse AllOtherFinished) orelse IsInclusive == false),
+    FinishedTasksQty = length(FinishedNames),
     io:format("get_inclusive_tasks is inclusive - ~p~n finished tasks qty ~p~n", [IsInclusive, FinishedTasksQty]),
+    ?assert(IsInclusive == true andalso (FinishedTasksQty == length(Inputs) orelse AllOtherFinished) orelse IsInclusive == false),
     {IsInclusive, FinishedTasks}
     
 .
