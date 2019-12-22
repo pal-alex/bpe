@@ -13,7 +13,7 @@ start(_,_)   ->
                 % [ bpe:reload(I) || I <- application:get_env(bpe,procmodules,[bpe, bpe_proc, bpe_task]) ],
                 io:format("started supervisor bpe_otp~n", []),
                 syn:init(), 
-                % kvs:join(), kvs:ensure(kvs:writer("/bpe/proc")),
+                kvs:join(), kvs:writer("/bpe/proc", true),
                 X = supervisor:start_link({local, ?MODULE}, ?MODULE, []), respawn(), X.
 init([])     -> [ ets:new(T,opt()) || T <- [ processes ] ],
                 { ok, { { one_for_one, 5, 10 }, [] } }.

@@ -255,12 +255,14 @@ finish_process(ProcId) ->
 .
 finish_process(Proc0, ProcId) ->
     case bpe:current_tasks(ProcId) of
-        {-1, []} -> % copy to archive
-                    Feed = "/bpe/proc",
-                    FeedArc = "/bpe/archive",
+        {-1, []} -> % TODO: copy to archive
                     Proc = Proc0#process{finished = calendar:local_time()},
-                    kvs:append(Proc, FeedArc),
-                    kvs:delete(Feed, ProcId),
+                    Feed = "/bpe/proc",
+                    kvs:append(Proc, Feed),
+                    % FeedArc = "/bpe/archive",
+                    % kvs:move(Proc, Feed, FeedArc),
+                    % kvs:append(Proc, FeedArc),
+                    % kvs:delete(Feed, ProcId),
                     % TODO: terminate process and not infinity life for archive processes
                     {stop, finish, Proc};
         {_N, _StartedTasks} -> {reply, not_all_finished, Proc0}

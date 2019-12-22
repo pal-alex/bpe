@@ -69,11 +69,11 @@ is_equal(Task1, Task2) when is_list(Task1), is_list(Task2) ->
     % T2 = lists:map(fun(T) -> T#bpeTask.id end, Task2),
     T1_1 = lists:map(fun(T) -> T#bpeTask.name end, Task1),
     T1_2 = lists:map(fun(T) -> T#bpeTask.name end, Task2),
-    KeyName = lists:sort(T1_1) == lists:sort(T1_2),
+    ByName = lists:sort(T1_1) == lists:sort(T1_2),
     T2_1 = lists:map(fun(T) -> T#bpeTask.id end, Task1),
     T2_2 = lists:map(fun(T) -> T#bpeTask.id end, Task2),
-    KeyId = lists:sort(T2_1) == lists:sort(T2_2),
-    {KeyName, KeyId}
+    ById = lists:sort(T2_1) == lists:sort(T2_2),
+    {ByName, ById}
 ;
 is_equal(Task1, Task2) -> is_equal(to_list(Task1), to_list(Task2)).
 

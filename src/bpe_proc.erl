@@ -42,9 +42,13 @@ fix_reply({stop,{Reason,Reply},State}) -> {stop,Reason,Reply,State};
 fix_reply(P) -> P.
 
 handle_call({get},              _,Proc) -> { reply,Proc,Proc };
-% handle_call({run},              _,Proc) ->   run(final,Proc);
-% handle_call({until,Stage},      _,Proc) ->   run(Stage,Proc);
-handle_call({event,Event},      _,Proc) ->   process_event(Event,Proc);
+
+% handle_call({amend,Form},        _,Proc) -> try bpe:processFlow(bpe_env:append(env,Proc,Form)) catch X:Y:Z -> {reply,{error,'amend/2',Z},Proc} end;
+% handle_call({discard,Form},      _,Proc) -> try bpe:processFlow(bpe_env:remove(env,Proc,Form)) catch X:Y:Z -> {reply,{error,'discard/2',Z},Proc} end;
+% handle_call({event,Event},       _,Proc) -> try process_event(Event,Proc) catch X:Y:Z -> {reply,{error,'event/2',Z},Proc} end;
+% handle_call({modify,Form,append},_,Proc) -> try process_task([],bpe_env:append(env,Proc,Form),true) catch X:Y:Z -> {reply,{error,'append/2',Z},Proc} end;
+% handle_call({modify,Form,remove},_,Proc) -> try process_task([],bpe_env:remove(env,Proc,Form),true) catch X:Y:Z -> {reply,{error,'remove/2',Z},Proc} end;
+
 handle_call({start},            _,Proc) ->   bpe_task:process_tasks(Proc);
 handle_call({complete},         _,Proc) ->   bpe_task:process_tasks(Proc);
 handle_call({complete, _Stage},   _,Proc) ->   bpe_task:process_tasks(Proc);

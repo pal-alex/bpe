@@ -58,7 +58,46 @@ get_inclusive_tasks(Task, Proc) ->
     SH = bpe:get_significant_history(History, true),
     ShortHist = 'Elixir.BPE.Ext':get_short_history(SH),
     io:format("get_inclusive_tasks task in = ~p~n short history: ~n~p~n", [TaskName, ShortHist]),
-    {AllOtherFinished, FinishedTasks, FinishedNamesUnsorted} = lists:foldl(fun(H, {AllOtherFinished0, FinishedTasks0, FinishedNames0}) ->
+    {AllOtherFinished, UnfinishedTasks} = lists:foldl(fun(H, {AllOtherFinished0, UnfinishedTasks0} = Acc) ->
+                                                                    T0 = H#hist.task,
+                                                                    Stage0 = H#hist.stage,
+                                                                    TaskName0 = T0#bpeTask.name,
+                                                                    IsGate = TaskName0 == TaskName,
+                                                                    IsGateOrInput = IsGate orelse lists:member(TaskName0, Inputs),
+                                                                    case IsGateOrInput of
+                                                                        true -> AllOtherFinished1 = case {AllOtherFinished0, Stage0, IsGate} of
+                                                                                                {false, _, _} -> false;
+                                                                                                {_, finish, _} -> AllOtherFinished0;
+                                                                                                {_, _, true} -> AllOtherFinished0;
+                                                                                                {_, _, _} -> false
+                                                                                        end,
+                                                                                UnfinishedTasks1  = case Stage0 of
+                                                                                                    finish -> UnfinishedTasks0;
+                                                                                                    _ -> [T0|UnfinishedTasks0]
+                                                                                                end,
+
+                                                                                {AllOtherFinished1, UnfinishedTasks1};
+                                                                        false -> Acc
+                                                                    end
+                                                end, {true, []}, SH),
+    IsInclusive =  AllOtherFinished == true,
+    UnfinishedTasksQty = length(UnfinishedTasks),
+    io:format("get_inclusive_tasks is inclusive - ~p~n  unfinished tasks qty ~p~n", [IsInclusive, UnfinishedTasksQty]),
+    % ?assert(IsInclusive == true andalso (FinishedTasksQty == length(Inputs) orelse AllOtherFinished) orelse IsInclusive == false),
+    {IsInclusive, UnfinishedTasks}
+    
+.
+
+get_inclusive_tasks_old(Task, Proc) -> 
+    TaskName = Task#bpeTask.name,
+    TaskType = Task#bpeTask.type,
+    Flows = Proc#process.flows,
+    Inputs = lists:usort([F#sequenceFlow.source || F <- Flows, F#sequenceFlow.target == TaskName]),
+    History = bpe:hist(Proc#process.id),
+    SH = bpe:get_significant_history(History, true),
+    ShortHist = 'Elixir.BPE.Ext':get_short_history(SH),
+    io:format("get_inclusive_tasks task in = ~p~n short history: ~n~p~n", [TaskName, ShortHist]),
+    {IsOtherUnfinished, AllOtherFinished, FinishedTasks, FinishedNamesUnsorted} = lists:foldl(fun(H, {IsOtherUnfinished0, AllOtherFinished0, FinishedTasks0, FinishedNames0}) ->
                                                                     T0 = H#hist.task,
                                                                     Stage0 = H#hist.stage,
                                                                     TaskName0 = T0#bpeTask.name,
@@ -71,19 +110,22 @@ get_inclusive_tasks(Task, Proc) ->
                                                                     
                                                                     Res = lists:member(TaskName0, Inputs),
                                                                     case {Res, Stage0} of
-                                                                         {true, finish} -> {AllOtherFinished1, [T0#bpeTask{name = TaskName, type = TaskType}|FinishedTasks0], [TaskName0|FinishedNames0]};
-                                                                          _ -> {AllOtherFinished1, FinishedTasks0, FinishedNames0}
+                                                                         {true, finish} -> {IsOtherUnfinished0, AllOtherFinished1, [T0#bpeTask{name = TaskName, type = TaskType}|FinishedTasks0], [TaskName0|FinishedNames0]};
+                                                                         {true, _} -> {true, AllOtherFinished1, FinishedTasks0, FinishedNames0};
+                                                                         _ -> {IsOtherUnfinished0, AllOtherFinished1, FinishedTasks0, FinishedNames0}
                                                                     end
-                                                end, {[], [], []}, SH),
+                                                end, {false, [], [], []}, SH),
     FinishedNames = lists:usort(FinishedNamesUnsorted),
     Delta = lists:subtract(Inputs, FinishedNames),
-    IsInclusive = (Delta == [] orelse AllOtherFinished) andalso (FinishedTasks /= []),
+    IsInclusive = IsOtherUnfinished == false andalso (Delta == [] orelse AllOtherFinished) andalso (FinishedTasks /= []),
     FinishedTasksQty = length(FinishedNames),
     io:format("get_inclusive_tasks is inclusive - ~p~n finished tasks qty ~p~n", [IsInclusive, FinishedTasksQty]),
     ?assert(IsInclusive == true andalso (FinishedTasksQty == length(Inputs) orelse AllOtherFinished) orelse IsInclusive == false),
     {IsInclusive, FinishedTasks}
     
 .
+
+
 
 evaluate_expression(Expression) ->
     {ok, Tokens, _} = erl_scan:string(Expression),    % scan the code into tokens
